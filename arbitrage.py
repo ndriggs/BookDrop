@@ -7135,7 +7135,6 @@ search_params[137] = {
 # In[5]:
 
 
-num_searches = 5
 
 
 # In[6]:
@@ -7152,12 +7151,16 @@ for search in range(num_searches) :
 asins = list(itertools.chain.from_iterable(asins))
 asins = list(dict.fromkeys(asins))
 print('Num asins: ', len(asins))
-asins = asins[:110]
+
 # In[8]:
 
 
 def pull_and_analysize(list_of_asins) :
-    first_search = api.query(list_of_asins)
+    list_of_two_hun = [list_of_asins[i:i+200] for i in range(0, len(list_of_asins), 200)]
+    split_book_data = [[] for chunk in range(len(list_of_two_hun))]
+    for chunk in range(len(list_of_two_hun)) :
+        split_book_data[chunk] = api.query(list_of_two_hun[chunk])
+    first_search = list(itertools.chain.from_iterable(split_book_data))
     print('books successfully queried')
     print('Current time ', datetime.datetime.now().time())
     book_data = []
