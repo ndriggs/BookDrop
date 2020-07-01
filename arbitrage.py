@@ -7394,7 +7394,14 @@ def add_shipping(price) :
 def pull_and_update(rankings) :
     print('Getting the latest used price data... Today\'s date: ', datetime.datetime.now())
     new_asins = rankings['ASIN'].values
-    new_data = api.query(new_asins)
+    
+    list_of_two_hun = [new_asins[i:i+200] for i in range(0, len(new_asins), 200)]
+    split_book_data = [[] for chunk in range(len(list_of_two_hun))]
+    for chunk in range(len(list_of_two_hun)) :
+        split_book_data[chunk] = api.query(list_of_two_hun[chunk])
+    new_data = list(itertools.chain.from_iterable(split_book_data))
+    print('books successfully queried for the update')
+    
     new_roi = []
     for book in range(len(new_data)) :
         current_used_price = new_data[book]['data']['USED'][-1]
@@ -7410,6 +7417,7 @@ def pull_and_update(rankings) :
 
 
 def Export_Data_To_Sheets(df):
+    df.fillna('', inplace=True)
     scope = ['https://www.googleapis.com/auth/spreadsheets',
              'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_name('client_secret.json', scope)
@@ -7449,9 +7457,9 @@ if __name__ == '__main__' :
         list_of_rankings_df = pool.map(pull_and_analysize, split_asins)
         rankings = pd.concat(list_of_rankings_df, ignore_index=True, axis=0)
         rankings = rankings.sort_values(by='ROI', ascending=False)
-        top_thousand = rankings.copy().iloc[:100,:]
+        top_thousand = rankings.copy().iloc[:600,:]
         Export_Data_To_Sheets(top_thousand)
-        Export_To_SQL(rankings.iloc[:,[0,-1]])
+        #Export_To_SQL(rankings.iloc[:,[0,-1]])
         while(datetime.datetime.now().date() - last_updated < datetime.timedelta(30)) :
             top_seventh = round(len(asins) / 7)
             chunk = round(top_seventh / num_processes)
@@ -7463,8 +7471,8 @@ if __name__ == '__main__' :
             updated_rankings = pd.concat(updated_rankings_list, ignore_index=True, axis=0)
             updated_rankings = updated_rankings.sort_values(by='ROI', ascending=False)
             updated_rankings = pd.concat([updated_rankings, rankings.iloc[top_seventh:,:]], ignore_index=True, axis=0)
-            new_top_thousand = updated_rankings.copy().iloc[:100,1:]
+            new_top_thousand = updated_rankings.copy().iloc[:600,1:]
             Export_Data_To_Sheets(new_top_thousand)
-            Export_To_SQL(updated_rankings.iloc[:,[1,-1]])
+            #Export_To_SQL(updated_rankings.iloc[:,[1,-1]])
 
 
