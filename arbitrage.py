@@ -7138,7 +7138,7 @@ search_params[137] = {
 
 
 # In[6]:
-
+num_searches = 1
 
 asins = [[] for search in range(num_searches)]
 for search in range(num_searches) :
@@ -7152,8 +7152,53 @@ asins = list(itertools.chain.from_iterable(asins))
 asins = list(dict.fromkeys(asins))
 print('Num asins: ', len(asins))
 
+asins = asins[:2500]
 # In[8]:
 
+def lowest_available_price(book_data, day_sold) :
+    
+    #finding indexes
+    try :
+        used_index = np.where(book_data['data']['USED_time'] == day_sold)[0][0] - 1 
+    except IndexError :
+        try :
+            used_index = np.where(book_data['data']['USED_time'] < day_sold)[0][-1]
+        except IndexError :
+            used_index = np.nan
+            
+    try :
+        new_index = np.where(book_data['data']['NEW_time'] == day_sold)[0][0] - 1 
+    except IndexError :
+        try :
+            new_index = np.where(book_data['data']['NEW_time'] < day_sold)[0][-1]
+        except IndexError :
+            new_index = np.nan
+
+    try :
+        amazon_index = np.where(book_data['data']['AMAZON_time'] == day_sold)[0][0] - 1 
+    except IndexError :
+        try :
+            amazon_index = np.where(book_data['data']['AMAZON_time'] < day_sold)[0][-1]
+        except IndexError :
+            amazon_index = np.nan 
+    
+    #assigning prices
+    if np.isnan(used_index) :
+        used_price = 100000
+    else :   
+        used_price = book_data['data']['USED'][used_index]
+    if np.isnan(new_index) :
+        new_price = 100000
+    else :
+        new_price = book_data['data']['NEW'][new_index]  
+    if np.isnan(amazon_index) :
+        amazon_price = 100000
+    else :
+        amazon_price = book_data['data']['AMAZON'][amazon_index]
+            
+    prices = [used_price, new_price, amazon_price]
+    prices = pd.Series(prices).fillna(100000).tolist()
+    return np.amin(prices)
 
 def pull_and_analysize(list_of_asins) :
     list_of_two_hun = [list_of_asins[i:i+200] for i in range(0, len(list_of_asins), 200)]
@@ -7183,21 +7228,16 @@ def pull_and_analysize(list_of_asins) :
         sell_prices_list = []
         used_counts_list = []
         for day in np.where(last_two_years)[0] :
+            if book_data[book]['data']['SALES'][day] <= 0 :
+                book_data[book]['data']['SALES'][day] = book_data[book]['data']['SALES'][day - 1]
             if ((book_data[book]['data']['SALES'][day - 1] - 
                 book_data[book]['data']['SALES'][day]) / 
                 (book_data[book]['data']['SALES'][day - 1]) >= .04) :
                 day_sold = book_data[book]['data']['SALES_time'][day]
                 drop_dates_list.append(day_sold)
-                new = False
-                try :
-                    day_sold_Used_index = np.where(book_data[book]['data']['USED_time'] == day_sold)[0][0] - 1 
-                except IndexError :
-                    try :
-                        day_sold_Used_index = np.where(book_data[book]['data']['USED_time'] < day_sold)[0][-1]
-                    except IndexError :
-                        day_sold_Used_index = np.where(book_data[book]['data']['NEW_time'] < day_sold)[0][-1]
-                        new = True
-                sell_prices_list.append(book_data[book]['data']['NEW' if new else 'USED'][day_sold_Used_index])  
+                
+                sell_prices_list.append(lowest_available_price(book_data[book], day_sold))
+                
                 do_nothing = False
                 try :
                     day_sold_used_count = np.where(book_data[book]['data']['COUNT_USED_time'] == day_sold)[0][0] - 1 
