@@ -12,18 +12,10 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from sqlalchemy import create_engine
 import pymysql
-
-# In[ ]:
-
-
-# so the testcode.py works
-# step 1 - rewrite the arbitrage.py and get it to work in a straight line, test it with 50,000 asins
-# step 1 and a half - code in a way to time how long it takes for 1 book and how long it takes for the whole thing
-# step 2 - figure out how to run it in parallel (probably won't be able to)
-
+from pathos.pools import ProcessPool
+import time
 
 # In[2]:
-
 
 with open("api_key.txt") as key_file :
     keepa_api_key = key_file.readline().strip()
@@ -7152,7 +7144,7 @@ asins = list(itertools.chain.from_iterable(asins))
 asins = list(dict.fromkeys(asins))
 print('Num asins: ', len(asins))
 
-asins = asins[:2500]
+asins = asins[:200]
 # In[8]:
 
 def lowest_available_price(book_data, day_sold) :
@@ -7198,15 +7190,28 @@ def lowest_available_price(book_data, day_sold) :
             
     prices = [used_price, new_price, amazon_price]
     prices = pd.Series(prices).fillna(100000).tolist()
-    return np.amin(prices)
+    
+    for price in prices :
+        if price != 100000 :
+            if np.amin(prices) > 200 :
+                return 200
+            else :
+                return np.amin(prices)
 
-def pull_and_analysize(list_of_asins) :
+    arbitrarily_small_price = 2.224
+    return arbitrarily_small_price
+
+def get_book_data(list_of_asins) : 
     list_of_two_hun = [list_of_asins[i:i+200] for i in range(0, len(list_of_asins), 200)]
     split_book_data = [[] for chunk in range(len(list_of_two_hun))]
     for chunk in range(len(list_of_two_hun)) :
         split_book_data[chunk] = api.query(list_of_two_hun[chunk])
     first_search = list(itertools.chain.from_iterable(split_book_data))
     print('books successfully queried')
+    return first_search
+
+
+def pull_and_analysize(first_search) :
     print('Current time ', datetime.datetime.now().time())
     book_data = []
     
@@ -7360,7 +7365,9 @@ def pull_and_analysize(list_of_asins) :
     for book in range(len(book_data)) :
         cur_used = book_data[book]['data']['COUNT_USED'][-1]
         current_used_count.append(0 if cur_used == -1 else cur_used)
-        current_used_price.append(book_data[book]['data']['USED'][-1])
+        current_used_price.append(lowest_available_price(book_data[book], datetime.datetime.today()))
+        if current_used_price[-1] == 2.224 :
+            current_used_price[-1] = 1001
         x = 0
         lam = lambdas[book]
         probs = pd.DataFrame()
@@ -7431,24 +7438,19 @@ def add_shipping(price) :
 # In[10]:
 
 
-def pull_and_update(rankings) :
-    print('Getting the latest used price data... Today\'s date: ', datetime.datetime.now())
-    new_asins = rankings['ASIN'].values
-    
-    list_of_two_hun = [new_asins[i:i+200] for i in range(0, len(new_asins), 200)]
-    split_book_data = [[] for chunk in range(len(list_of_two_hun))]
-    for chunk in range(len(list_of_two_hun)) :
-        split_book_data[chunk] = api.query(list_of_two_hun[chunk])
-    new_data = list(itertools.chain.from_iterable(split_book_data))
-    print('books successfully queried for the update')
-    
+def pull_and_update(rankings, new_asins) :
+    new_data = get_book_data(new_asins)
     new_roi = []
-    for book in range(len(new_data)) :
-        current_used_price = new_data[book]['data']['USED'][-1]
-        roi = (rankings['Value'][book] - add_shipping(current_used_price)) / add_shipping(current_used_price)
-        new_roi.append(roi)
+    for asin_book in range(len(new_data)) :
+        for book in range(len(new_data)) :
+            if new_data[book]['asin'] == new_asins[asin_book] :
+                current_used_price = lowest_available_price(new_data[book], datetime.datetime.today())
+                if current_used_price == 2.224 :
+                    current_used_price = 1001
+                roi = (rankings.iloc[asin_book,2] - add_shipping(current_used_price)) / add_shipping(current_used_price)
+                new_roi.append(roi)
     new_rankings = rankings.copy()
-    new_rankings.loc[:,'ROI'] = np.around(new_roi, 2)
+    new_rankings.iloc[:top_seventh, 1] = np.around(new_roi, 2)
     new_rankings = new_rankings.sort_values(by='ROI', ascending=False)
     return new_rankings
 
@@ -7488,13 +7490,14 @@ def Export_To_SQL(df):
 if __name__ == '__main__' :
     print('entered main function')
     num_processes = 10
-    pool = multiprocessing.Pool(processes=num_processes)
-    n = round(len(asins) / num_processes )
-    split_asins = [asins[i:i+n] for i in range(0, len(asins), n)]
+    pool = ProcessPool(nodes=num_processes)
+    data = get_book_data(asins)
+    n = round(len(data) / num_processes )
+    split_data = [data[i:i+n] for i in range(0, len(data), n)]
     while(True) :
         last_updated = datetime.datetime.now().date()
         print('About to start... current time: ', datetime.datetime.now().time())
-        list_of_rankings_df = pool.map(pull_and_analysize, split_asins)
+        list_of_rankings_df = pool.map(pull_and_analysize, split_data)
         rankings = pd.concat(list_of_rankings_df, ignore_index=True, axis=0)
         rankings = rankings.sort_values(by='ROI', ascending=False)
         top_thousand = rankings.copy().iloc[:600,:]
@@ -7502,17 +7505,18 @@ if __name__ == '__main__' :
         #Export_To_SQL(rankings.iloc[:,[0,-1]])
         while(datetime.datetime.now().date() - last_updated < datetime.timedelta(30)) :
             top_seventh = round(len(asins) / 7)
-            chunk = round(top_seventh / num_processes)
-            split_rankings = [rankings.copy().iloc[i:i+chunk] for i in range(0, top_seventh, chunk)]
+            rankings_to_rerank = rankings.copy().iloc[:top_seventh]
+            #chunk = round(top_seventh / num_processes)
+            #split_rankings = [rankings.copy().iloc[i:i+chunk] for i in range(0, top_seventh, chunk)]
             print('entered into updating phase')
-            for mini_df in split_rankings :
-                mini_df.reset_index(inplace=True)
-            updated_rankings_list = pool.map(pull_and_update, split_rankings)
-            updated_rankings = pd.concat(updated_rankings_list, ignore_index=True, axis=0)
+            #for mini_df in split_rankings :
+                #mini_df.reset_index(inplace=True)
+            new_asins = rankings_to_rerank['ASIN'].values
+            updated_rankings = pull_and_update(rankings_to_rerank, new_asins)
+            #updated_rankings_list = pool.map(pull_and_update, split_rankings)
+            #updated_rankings = pd.concat(updated_rankings_list, ignore_index=True, axis=0)
             updated_rankings = updated_rankings.sort_values(by='ROI', ascending=False)
             updated_rankings = pd.concat([updated_rankings, rankings.iloc[top_seventh:,:]], ignore_index=True, axis=0)
-            new_top_thousand = updated_rankings.copy().iloc[:600,1:]
-            Export_Data_To_Sheets(new_top_thousand)
-            #Export_To_SQL(updated_rankings.iloc[:,[1,-1]])
-
-
+            new_top_six_hun = updated_rankings.copy().iloc[:600,:]
+            Export_Data_To_Sheets(new_top_six_hun)
+            #Export_To_SQL(updated_rankings.iloc[:,[1,-1]]) 
